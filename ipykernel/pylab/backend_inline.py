@@ -3,21 +3,15 @@
 # Copyright (c) IPython Development Team.
 # Distributed under the terms of the Modified BSD License.
 
-import matplotlib
-from matplotlib.backends.backend_agg import (
-    new_figure_manager,
-    FigureCanvasAgg,
-    new_figure_manager_given_figure,
-) # analysis: ignore
-from matplotlib import colors
-from matplotlib._pylab_helpers import Gcf
+import warnings
 
-from IPython.core.getipython import get_ipython
-from IPython.core.pylabtools import select_figure_formats
-from IPython.display import display
+from matplotlib_inline.backend_inline import * # analysis: ignore
+
 
 from .config import InlineBackend
 
+s8weber
+s8weber@c4.usr.sh
 
 def show(close=None, block=None):
     """Show all figures as SVG/PNG payloads sent to the IPython clients.
@@ -151,69 +145,20 @@ def flush_figures():
 # See https://github.com/matplotlib/matplotlib/pull/1125
 FigureCanvas = FigureCanvasAgg
 
-
-def configure_inline_support(shell, backend):
-    """Configure an IPython shell object for matplotlib use.
-
-    Parameters
-    ----------
-    shell : InteractiveShell instance
-
-    backend : matplotlib backend
-    """
-    # If using our svg payload backend, register the post-execution
-    # function that will pick up the results for display.  This can only be
-    # done with access to the real shell object.
-
-    cfg = InlineBackend.instance(parent=shell)
-    cfg.shell = shell
-    if cfg not in shell.configurables:
-        shell.configurables.append(cfg)
-
-    if backend == 'module://ipykernel.pylab.backend_inline':
-        shell.events.register('post_execute', flush_figures)
-
-        # Save rcParams that will be overwrittern
-        shell._saved_rcParams = {}
-        for k in cfg.rc:
-            shell._saved_rcParams[k] = matplotlib.rcParams[k]
-        # load inline_rc
-        matplotlib.rcParams.update(cfg.rc)
-        new_backend_name = "inline"
-    else:
-        try:
-            shell.events.unregister('post_execute', flush_figures)
-        except ValueError:
-            pass
-        if hasattr(shell, '_saved_rcParams'):
-            matplotlib.rcParams.update(shell._saved_rcParams)
-            del shell._saved_rcParams
-        new_backend_name = "other"
-
-    # only enable the formats once -> don't change the enabled formats (which the user may
-    # has changed) when getting another "%matplotlib inline" call.
-    # See https://github.com/ipython/ipykernel/issues/29
-    cur_backend = getattr(configure_inline_support, "current_backend", "unset")
-    if new_backend_name != cur_backend:
-        # Setup the default figure format
-        select_figure_formats(shell, cfg.figure_formats, **cfg.print_figure_kwargs)
-        configure_inline_support.current_backend = new_backend_name
-
-
 def _enable_matplotlib_integration():
     """Enable extra IPython matplotlib integration when we are loaded as the matplotlib backend."""
     from matplotlib import get_backend
     ip = get_ipython()
     backend = get_backend()
     if ip and backend == 'module://%s' % __name__:
-        from IPython.core.pylabtools import activate_matplotlib
+        from IPython.core.pylabtools import configure_inline_support
         try:
-            activate_matplotlib(backend)
+            matplotlib.interactive(True)
             configure_inline_support(ip, backend)
         except (ImportError, AttributeError):
             # bugs may cause a circular import on Python 2
             def configure_once(*args):
-                activate_matplotlib(backend)
+                matplotlib.interactive(True)
                 configure_inline_support(ip, backend)
                 ip.events.unregister('post_run_cell', configure_once)
             ip.events.register('post_run_cell', configure_once)

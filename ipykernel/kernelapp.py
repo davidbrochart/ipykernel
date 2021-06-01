@@ -10,12 +10,13 @@ import errno
 import signal
 import traceback
 import logging
+from io import TextIOWrapper, FileIO
+from logging import StreamHandler
 
 import tornado
 from tornado import ioloop
 
 import zmq
-from zmq.eventloop import ioloop as zmq_ioloop
 from zmq.eventloop.zmqstream import ZMQStream
 
 from IPython.core.application import (
@@ -345,6 +346,10 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp,
             self.log.debug("Closing iopub channel")
             self.iopub_thread.stop()
             self.iopub_thread.close()
+        if self.control_thread and self.control_thread.is_alive():
+            self.log.debug("Closing control thread")
+            self.control_thread.stop()
+            self.control_thread.join()
 
         if self.debugpy_socket and not self.debugpy_socket.closed:
             self.debugpy_socket.close()
@@ -414,9 +419,22 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp,
                                            echo=e_stdout)
             if sys.stderr is not None:
                 sys.stderr.flush()
-            sys.stderr = outstream_factory(self.session, self.iopub_thread,
-                                           'stderr',
-                                           echo=e_stderr)
+            sys.stderr = outstream_factory(
+                self.session, self.iopub_thread, "stderr", echo=e_stderr
+            )
+            if hasattr(sys.stderr, "_original_stdstream_copy"):
+
+                for handler in self.log.handlers:
+                    if isinstance(handler, StreamHandler) and (
+                        handler.stream.buffer.fileno() == 2
+                    ):
+                        self.log.debug(
+                            "Seeing logger to stderr, rerouting to raw filedescriptor."
+                        )
+
+                        handler.stream = TextIOWrapper(
+                            FileIO(sys.stderr._original_stdstream_copy, "w")
+                        )
         if self.displayhook_class:
             displayhook_factory = import_item(str(self.displayhook_class))
             self.displayhook = displayhook_factory(self.session, self.iopub_socket)
@@ -473,7 +491,7 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp,
                                 control_stream=control_stream,
                                 debugpy_stream=debugpy_stream,
                                 debug_shell_socket=self.debug_shell_socket,
-                                shell_stream=shell_stream, 
+                                shell_stream=shell_stream,
                                 control_thread=self.control_thread,
                                 iopub_thread=self.iopub_thread,
                                 iopub_socket=self.iopub_socket,
@@ -498,7 +516,7 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp,
         # but lower priority than anything else (mpl.use() for instance).
         # This only affects matplotlib >= 1.5
         if not os.environ.get('MPLBACKEND'):
-            os.environ['MPLBACKEND'] = 'module://ipykernel.pylab.backend_inline'
+            os.environ['MPLBACKEND'] = 'module://matplotlib_inline.backend_inline'
 
         # Provide a wrapper for :meth:`InteractiveShellApp.init_gui_pylab`
         # to ensure that any exception is printed straight to stderr.
@@ -527,10 +545,10 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp,
     def configure_tornado_logger(self):
         """ Configure the tornado logging.Logger.
 
-            Must set up the tornado logger or else tornado will call
-            basicConfig for the root logger which makes the root logger
-            go to the real sys.stderr instead of the capture streams.
-            This function mimics the setup of logging.basicConfig.
+        Must set up the tornado logger or else tornado will call
+        basicConfig for the root logger which makes the root logger
+        go to the real sys.stderr instead of the capture streams.
+        This function mimics the setup of logging.basicConfig.
         """
         logger = logging.getLogger('tornado')
         handler = logging.StreamHandler()
@@ -547,14 +565,21 @@ class IPKernelApp(BaseIPythonApplication, InteractiveShellApp,
         Pick the older SelectorEventLoopPolicy on Windows
         if the known-incompatible default policy is in use.
 
+        Support for Proactor via a background thread is available in tornado 6.1,
+        but it is still preferable to run the Selector in the main thread
+        instead of the background.
+
         do this as early as possible to make it a low priority and overrideable
 
         ref: https://github.com/tornadoweb/tornado/issues/2608
 
-        FIXME: if/when tornado supports the defaults in asyncio,
-               remove and bump tornado requirement for py38
+        FIXME: if/when tornado supports the defaults in asyncio without threads,
+               remove and bump tornado requirement for py38.
+               Most likely, this will mean a new Python version
+               where asyncio.ProactorEventLoop supports add_reader and friends.
+
         """
-        if sys.platform.startswith("win") and sys.version_info >= (3, 8) and tornado.version_info < (6, 1):
+        if sys.platform.startswith("win") and sys.version_info >= (3, 8):
             import asyncio
             try:
                 from asyncio import (

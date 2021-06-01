@@ -10,7 +10,6 @@ import sys
 
 from IPython.core import release
 from IPython.utils.tokenutil import token_at_cursor, line_at_cursor
-from tornado import gen
 from traitlets import Instance, Type, Any, List, Bool, observe, observe_compat
 from zmq.eventloop.zmqstream import ZMQStream
 
@@ -149,7 +148,6 @@ class IPythonKernel(KernelBase):
         'file_extension': '.py'
     }
 
-    @gen.coroutine
     def dispatch_debugpy(self, msg):
         # The first frame is the socket id, we can drop it
         frame = msg[1].bytes.decode('utf-8')
@@ -162,7 +160,10 @@ class IPythonKernel(KernelBase):
 
     def start(self):
         self.shell.exit_now = False
-        self.debugpy_stream.on_recv(self.dispatch_debugpy, copy=False)
+        if self.debugpy_stream is None:
+            self.log.warning("debugpy_stream undefined, debugging will not be enabled")
+        else:
+            self.debugpy_stream.on_recv(self.dispatch_debugpy, copy=False)
         super(IPythonKernel, self).start()
 
     def set_parent(self, ident, parent, channel='shell'):
@@ -276,9 +277,8 @@ class IPythonKernel(KernelBase):
             # restore the previous sigint handler
             signal.signal(signal.SIGINT, save_sigint)
 
-    @gen.coroutine
-    def do_execute(self, code, silent, store_history=True,
-                   user_expressions=None, allow_stdin=False):
+    async def do_execute(self, code, silent, store_history=True,
+                         user_expressions=None, allow_stdin=False):
         shell = self.shell # we'll need this a lot here
 
         self._forward_input(allow_stdin)
@@ -291,8 +291,7 @@ class IPythonKernel(KernelBase):
             should_run_async = lambda cell: False
             # older IPython,
             # use blocking run_cell and wrap it in coroutine
-            @gen.coroutine
-            def run_cell(*args, **kwargs):
+            async def run_cell(*args, **kwargs):
                 return shell.run_cell(*args, **kwargs)
         try:
 
@@ -324,7 +323,7 @@ class IPythonKernel(KernelBase):
                 with self._cancel_on_sigint(coro_future):
                     res = None
                     try:
-                        res = yield coro_future
+                        res = await coro_future
                     finally:
                         shell.events.trigger('post_execute')
                         if not silent:
@@ -404,9 +403,8 @@ class IPythonKernel(KernelBase):
                 'metadata' : {},
                 'status' : 'ok'}
 
-    @gen.coroutine
-    def do_debug_request(self, msg):
-        return (yield self.debugger.process_request(msg))
+    async def do_debug_request(self, msg):
+        return await self.debugger.process_request(msg)
 
     def _experimental_do_complete(self, code, cursor_pos):
         """
@@ -441,8 +439,6 @@ class IPythonKernel(KernelBase):
                 'cursor_start': s,
                 'metadata': {_EXPERIMENTAL_KEY_NAME: comps},
                 'status': 'ok'}
-
-
 
     def do_inspect(self, code, cursor_pos, detail_level=0):
         name = token_at_cursor(code, cursor_pos)

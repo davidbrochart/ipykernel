@@ -16,11 +16,8 @@ machinery.  This should thus be thought of as scaffolding.
 
 import os
 import sys
-import time
 import warnings
 from threading import local
-
-from tornado import ioloop
 
 from IPython.core.interactiveshell import (
     InteractiveShell, InteractiveShellABC
@@ -59,6 +56,9 @@ except ImportError:
 # Functions and classes
 #-----------------------------------------------------------------------------
 
+_sentinel = object()
+
+
 class ZMQDisplayPublisher(DisplayPublisher):
     """A display publisher that publishes data using a ZeroMQ PUB socket."""
 
@@ -93,24 +93,45 @@ class ZMQDisplayPublisher(DisplayPublisher):
             self._thread_local.hooks = []
         return self._thread_local.hooks
 
-    def publish(self, data, metadata=None, source=None, transient=None,
+    def publish(
+        self,
+        data,
+        metadata=None,
+        source=_sentinel,
+        transient=None,
         update=False,
     ):
         """Publish a display-data message
 
         Parameters
         ----------
-        data: dict
+        data : dict
             A mime-bundle dict, keyed by mime-type.
-        metadata: dict, optional
+        metadata : dict, optional
             Metadata associated with the data.
-        transient: dict, optional, keyword-only
+        transient : dict, optional, keyword-only
             Transient data that may only be relevant during a live display,
             such as display_id.
             Transient data should not be persisted to documents.
-        update: bool, optional, keyword-only
+        update : bool, optional, keyword-only
             If True, send an update_display_data message instead of display_data.
+        source : unused
+            Value will have no effect on function behavior. Parameter is still
+            present for backward compatibility but will be removed in the
+            future.
+
+            .. deprecated:: 4.0.1
+
+                `source` has been deprecated and no-op since ipykernel 4.0.1
+                (2015)
         """
+        if source is not _sentinel:
+            warnings.warn(
+                "`source` has been deprecated since ipykernel 4.0.1 "
+                "and will have no effect",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         self._flush_streams()
         if metadata is None:
             metadata = {}
@@ -149,7 +170,7 @@ class ZMQDisplayPublisher(DisplayPublisher):
 
         Parameters
         ----------
-        wait: bool (default: False)
+        wait : bool (default: False)
             If True, the output will not be cleared immediately,
             instead waiting for the next display before clearing.
             This reduces bounce during repeated clear & display loops.
@@ -173,7 +194,6 @@ class ZMQDisplayPublisher(DisplayPublisher):
         Returns
         -------
         Either a publishable message, or `None`.
-
         The DisplayHook objects must return a message from
         the __call__ method if they still require the
         `session.send` method to be called after transformation.
@@ -188,13 +208,13 @@ class ZMQDisplayPublisher(DisplayPublisher):
 
         Parameters
         ----------
-        hook: Any callable object which has previously been
-              registered as a hook.
+        hook : Any callable object which has previously been
+            registered as a hook.
 
         Returns
         -------
         bool - `True` if the hook was removed, `False` if it wasn't
-               found.
+            found.
         """
         try:
             self._hooks.remove(hook)
@@ -555,8 +575,13 @@ class ZMQInteractiveShell(InteractiveShell):
         if dh.topic:
             topic = dh.topic.replace(b'execute_result', b'error')
 
-        exc_msg = dh.session.send(dh.pub_socket, 'error', json_clean(exc_content),
-                                  dh.parent_header, ident=topic)
+        dh.session.send(
+            dh.pub_socket,
+            "error",
+            json_clean(exc_content),
+            dh.parent_header,
+            ident=topic,
+        )
 
         # FIXME - Once we rely on Python 3, the traceback is stored on the
         # exception object, so we shouldn't need to store it here.
@@ -596,15 +621,6 @@ class ZMQInteractiveShell(InteractiveShell):
         self.register_magics(KernelMagics)
         self.magics_manager.register_alias('ed', 'edit')
 
-    def enable_matplotlib(self, gui=None):
-        gui, backend = super(ZMQInteractiveShell, self).enable_matplotlib(gui)
-
-        from ipykernel.pylab.backend_inline import configure_inline_support
-
-        configure_inline_support(self, backend)
-
-        return gui, backend
-
     def init_virtualenv(self):
         # Overridden not to do virtualenv detection, because it's probably
         # not appropriate in a kernel. To use a kernel in a virtualenv, install
@@ -618,9 +634,9 @@ class ZMQInteractiveShell(InteractiveShell):
         Parameters
         ----------
         cmd : str
-          Command to execute (can not end in '&', as background processes are
-          not supported.  Should not be a command that expects input
-          other than simple text.
+            Command to execute (can not end in '&', as background processes are
+            not supported.  Should not be a command that expects input
+            other than simple text.
         """
         if cmd.rstrip().endswith('&'):
             # this is *far* from a rigorous test
